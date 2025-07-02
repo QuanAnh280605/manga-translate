@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 import base64
 import requests
@@ -7,19 +7,14 @@ import io
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-
 load_dotenv()
-
 app = FastAPI()
-
 GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY")
 GOOGLE_TRANSLATE_API_KEY = os.getenv("GOOGLE_VISION_API_KEY")
-
 # ---- Detect words (not just symbols) ----
 def detect_words_from_image(image_bytes: bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_VISION_API_KEY}"
-
     body = {
         "requests": [
             {
@@ -28,185 +23,148 @@ def detect_words_from_image(image_bytes: bytes):
             }
         ]
     }
+    result = []
+    boundingBoxWords = []
 
     response = requests.post(url, json=body)
-    response.raise_for_status()
-    annotations = response.json()
+    response_data = response.json()
+    full_text = response_data['responses'][0].get('fullTextAnnotation')
+    for page in full_text['pages']:
+        for block in page['blocks']:
+            block_text = ''
+            for paragraph in block['paragraphs']:
+                for word in paragraph['words']:
+                    word_text = ''.join(symbol['text'] for symbol in word['symbols'])
+                    boundingBoxWords.append(get_bounding_box(word['boundingBox']['vertices']))
+                    # for symbol in word['symbols']:
+                    #     boundingBoxWords.append(get_bounding_box(symbol['boundingBox']['vertices']))
+                    block_text += (" " + word_text)
+            result.append({
+                'text': block_text,
+                'boundingBox': get_bounding_box(block['boundingBox']['vertices'])
+            })
+    return result, boundingBoxWords
 
-    words = []
-    try:
-        pages = annotations["responses"][0]["fullTextAnnotation"]["pages"]
-        for page in pages:
-            for block in page.get("blocks", []):
-                for paragraph in block.get("paragraphs", []):
-                    for word in paragraph.get("words", []):
-                        word_text = "".join([s["text"] for s in word["symbols"]])
-                        word_box = word["boundingBox"]["vertices"]
-                        words.append({
-                            "text": word_text,
-                            "bounding_box": word_box
-                        })
-    except KeyError:
-        return []
-
-    return words
-
-
-def wrap_text_to_width(draw, text, font, max_width):
-    words = text.split()
-    lines = []
-    line = ""
-
-    for word in words:
-        test_line = f"{line} {word}".strip()
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        width = bbox[2] - bbox[0]
-        if width <= max_width:
-            line = test_line
-        else:
-            lines.append(line)
-            line = word
-
-    if line:
-        lines.append(line)
-
-    return lines
-
-# ---- Font size dựa vào bounding box ----
-def get_font_size(box):
-    if len(box) >= 2:
-        y0 = box[0].get("y", 0)
-        y1 = box[2].get("y", 0)
-        height = abs(y1 - y0)
-        return max(10, height)
-    return 40
-
-# ---- Translate danh sách text ----
-def translate_texts(texts, target_lang="vi"):
-    url = f"https://translation.googleapis.com/language/translate/v2?key={GOOGLE_TRANSLATE_API_KEY}"
-    body = {
-        "q": texts,
-        "target": target_lang,
-        "format": "text"
+def get_bounding_box(vertices):
+    x_coords = [v.get('x', 0) for v in vertices]
+    y_coords = [v.get('y', 0) for v in vertices]
+    return {
+        'min_x': min(x_coords),
+        'max_x': max(x_coords),
+        'min_y': min(y_coords),
+        'max_y': max(y_coords)
     }
-    response = requests.post(url, json=body)
-    response.raise_for_status()
-    data = response.json()
-    return [t["translatedText"] for t in data["data"]["translations"]]
 
-def wrap_text_to_width(draw, text, font, max_width):
+def remove_text(boundingBox, draw, padding=4):
+    for bbox in boundingBox:
+        draw.rectangle([
+            (bbox['min_x'] - padding, bbox['min_y'] - padding),
+            (bbox['max_x'] + padding, bbox['max_y'] + padding)
+        ], fill="white")
+
+def wrap_text(text, font, max_width, draw):
     words = text.split()
     lines = []
-    line = ""
-
+    current_line = ''
     for word in words:
-        test_line = f"{line} {word}".strip()
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        width = bbox[2] - bbox[0]
-        if width <= max_width:
-            line = test_line
+        test_line = current_line + (' ' if current_line else '') + word
+        left, top, right, bottom = draw.textbbox((0, 0), test_line, font=font)
+        if right - left <= max_width:
+            current_line = test_line
         else:
-            lines.append(line)
-            line = word
-
-    if line:
-        lines.append(line)
-
+            if current_line:
+                lines.append(current_line)
+            current_line = word
+    if current_line:
+        lines.append(current_line)
     return lines
-
-
-def wrap_text_to_width(draw, text, font, max_width):
-    words = text.split()
-    lines = []
-    line = ""
-
-    for word in words:
-        test_line = f"{line} {word}".strip()
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        width = bbox[2] - bbox[0]
-        if width <= max_width:
-            line = test_line
-        else:
-            if line:
-                lines.append(line)
-            line = word
-
-    if line:
-        lines.append(line)
-
-    return lines
-
-def draw_translated_texts(image_bytes, words):
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    draw = ImageDraw.Draw(image)
-    font_path = Path("fonts/Nunito-Black.ttf")
-
-    drawn_boxes = []
-
-    for word in words:
-        text = word["text"]
-        box = word["bounding_box"]
-        if len(box) >= 1:
-            x = box[0].get("x", 0)
-            y = box[0].get("y", 0)
-            x2 = box[2].get("x", x + 100)  # lấy chiều rộng ước lượng
-            max_width = abs(x2 - x)
-
-            font_size = min(50, get_font_size(box))
-            font = ImageFont.truetype(str(font_path), size=font_size)
-
-            # Tự động xuống dòng nếu text dài
-            lines = wrap_text_to_width(draw, text, font, max_width)
-            text_height = sum(draw.textbbox((0, 0), line, font=font)[3] for line in lines)
-            proposed_box = [x, y, x + max_width, y + text_height]
-
-            # Dịch xuống nếu bị đè
-            max_shift = 100
-            shift = 0
-            while shift < max_shift:
-                overlap = False
-                for db in drawn_boxes:
-                    if boxes_overlap(proposed_box, db):
-                        overlap = True
-                        break
-                if not overlap:
-                    break
-                y += 5
-                proposed_box = [x, y, x + max_width, y + text_height]
-                shift += 5
-
-            # Vẽ từng dòng text
-            for line in lines:
-                draw.text((x, y), line, font=font, fill="blue")
-                y += draw.textbbox((0, 0), line, font=font)[3]  # cách dòng
-
-            drawn_boxes.append(proposed_box)
-
-    return image
-
-
-def boxes_overlap(box1, box2):
-    # box = [x1, y1, x2, y2]
-    x1, y1, x2, y2 = box1
-    a1, b1, a2, b2 = box2
-    return not (x2 < a1 or x1 > a2 or y2 < b1 or y1 > b2)
-
-
-# ---- API dịch và in lên ảnh ----
-@app.post("/upload/")
+    
+@app.post("/upload/")   
 async def upload_image(file: UploadFile = File(...)):
     contents = await file.read()
-    words = detect_words_from_image(contents)
-    original_texts = [w["text"] for w in words]
-    translated_texts = translate_texts(original_texts)
+    words, boundingBoxWords = detect_words_from_image(contents)
+    # Đọc ảnh từ bytes
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
+    draw = ImageDraw.Draw(image)
 
-    # Gán lại text tiếng Việt vào từng word
-    for i, w in enumerate(words):
-        w["text"] = translated_texts[i]
+    remove_text(boundingBoxWords, draw)
 
-    image = draw_translated_texts(contents, words)
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
 
-    return StreamingResponse(buffer, media_type="image/png")
+    try:
+        font = ImageFont.truetype("./fonts/Nunito-Black.ttf", 20)
+    except:
+        font = ImageFont.load_default()
+    for word in words:
+        bbox = word['boundingBox']
+        text = word['text'].strip()
+        
+        # Chèn lại text vào giữa vùng bounding box, tự động xuống dòng
+        max_width = bbox['max_x'] - bbox['min_x']
+        lines = wrap_text(text, font, max_width, draw)
+        # Tính tổng chiều cao các dòng
+        line_heights = []
+        for line in lines:
+            left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+            line_heights.append(bottom - top)
+        total_text_height = sum(line_heights)
+        # Bắt đầu vẽ từ vị trí căn giữa theo chiều dọc
+        y = bbox['min_y'] + ((bbox['max_y'] - bbox['min_y']) - total_text_height) // 2
+        for i, line in enumerate(lines):
+            left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+            text_width = right - left
+            x = bbox['min_x'] + (max_width - text_width) // 2
+            draw.text((x, y), line, fill="black", font=font)
+            y += line_heights[i]
+    # Lưu ảnh ra buffer
+    buf = io.BytesIO()
+    image.save(buf, format='PNG')
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="image/png")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def detect_words(image_bytes: bytes):
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    url = f"https://vision.googleapis.com/v1/images:annotate?key={GOOGLE_VISION_API_KEY}"
+    body = {
+        "requests": [
+            {
+                "image": {"content": base64_image},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}]
+            }
+        ]
+    }
+    result = []
+    response = requests.post(url, json=body)
+    response_data = response.json()
+    return response_data
+
+@app.post("/upload-image/")   
+async def detect_words_api(file: UploadFile = File(...)):
+    contents = await file.read()
+    response_data = detect_words(contents)
+    return response_data
