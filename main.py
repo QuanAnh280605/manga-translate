@@ -97,7 +97,7 @@ async def upload_image(file: UploadFile = File(...)):
     for word in words:
         bbox = word['boundingBox']
         text = word['text'].strip()
-        
+
         # Chèn lại text vào giữa vùng bounding box, tự động xuống dòng
         max_width = bbox['max_x'] - bbox['min_x']
         lines = wrap_text(text, font, max_width, draw)
