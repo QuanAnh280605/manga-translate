@@ -35,14 +35,13 @@ def detect_words_from_image(image_bytes: bytes):
             for paragraph in block['paragraphs']:
                 for word in paragraph['words']:
                     word_text = ''.join(symbol['text'] for symbol in word['symbols'])
-                    boundingBoxWords.append(get_bounding_box(word['boundingBox']['vertices']))
-                    # for symbol in word['symbols']:
-                    #     boundingBoxWords.append(get_bounding_box(symbol['boundingBox']['vertices']))
+                    # boundingBoxWords.append(get_bounding_box(word['boundingBox']['vertices']))
                     block_text += (" " + word_text)
             result.append({
                 'text': block_text,
                 'boundingBox': get_bounding_box(block['boundingBox']['vertices'])
             })
+            boundingBoxWords.append(get_bounding_box(block['boundingBox']['vertices']))
     return result, boundingBoxWords
 
 def get_bounding_box(vertices):
@@ -55,9 +54,9 @@ def get_bounding_box(vertices):
         'max_y': max(y_coords)
     }
 
-def remove_text(boundingBox, draw, padding=4):
-    for bbox in boundingBox:
-        draw.rectangle([
+def remove_text(boundingBox, draw, padding=0):
+    bbox = boundingBox[0]
+    draw.rectangle([
             (bbox['min_x'] - padding, bbox['min_y'] - padding),
             (bbox['max_x'] + padding, bbox['max_y'] + padding)
         ], fill="white")
@@ -90,31 +89,31 @@ async def upload_image(file: UploadFile = File(...)):
     remove_text(boundingBoxWords, draw)
 
 
-    try:
-        font = ImageFont.truetype("./fonts/Nunito-Black.ttf", 20)
-    except:
-        font = ImageFont.load_default()
-    for word in words:
-        bbox = word['boundingBox']
-        text = word['text'].strip()
+    # try:
+    #     font = ImageFont.truetype("./fonts/Nunito-Black.ttf", 20)
+    # except:
+    #     font = ImageFont.load_default()
+    # for word in words:
+    #     bbox = word['boundingBox']
+    #     text = word['text'].strip()
 
-        # Chèn lại text vào giữa vùng bounding box, tự động xuống dòng
-        max_width = bbox['max_x'] - bbox['min_x']
-        lines = wrap_text(text, font, max_width, draw)
-        # Tính tổng chiều cao các dòng
-        line_heights = []
-        for line in lines:
-            left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
-            line_heights.append(bottom - top)
-        total_text_height = sum(line_heights)
-        # Bắt đầu vẽ từ vị trí căn giữa theo chiều dọc
-        y = bbox['min_y'] + ((bbox['max_y'] - bbox['min_y']) - total_text_height) // 2
-        for i, line in enumerate(lines):
-            left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
-            text_width = right - left
-            x = bbox['min_x'] + (max_width - text_width) // 2
-            draw.text((x, y), line, fill="black", font=font)
-            y += line_heights[i]
+    #     # Chèn lại text vào giữa vùng bounding box, tự động xuống dòng
+    #     max_width = bbox['max_x'] - bbox['min_x']
+    #     lines = wrap_text(text, font, max_width, draw)
+    #     # Tính tổng chiều cao các dòng
+    #     line_heights = []
+    #     for line in lines:
+    #         left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+    #         line_heights.append(bottom - top)
+    #     total_text_height = sum(line_heights)
+    #     # Bắt đầu vẽ từ vị trí căn giữa theo chiều dọc
+    #     y = bbox['min_y'] + ((bbox['max_y'] - bbox['min_y']) - total_text_height) // 2
+    #     for i, line in enumerate(lines):
+    #         left, top, right, bottom = draw.textbbox((0, 0), line, font=font)
+    #         text_width = right - left
+    #         x = bbox['min_x'] + (max_width - text_width) // 2
+    #         draw.text((x, y), line, fill="black", font=font)
+    #         y += line_heights[i]
     # Lưu ảnh ra buffer
     buf = io.BytesIO()
     image.save(buf, format='PNG')
